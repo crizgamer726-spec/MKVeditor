@@ -1,18 +1,11 @@
 package com.mkveditor.app
 
-import android.content.Context
-import android.net.Uri
 import com.arthenica.ffmpegkit.FFmpegKit
-import com.arthenica.ffmpegkit.FFmpegKitConfig
 import com.arthenica.ffmpegkit.FFprobeKit
 import com.arthenica.ffmpegkit.ReturnCode
 import org.json.JSONObject
 
 object Engine {
-
-    /** Convierte un Uri elegido por el usuario en un parámetro que FFmpeg entiende. */
-    fun safParam(ctx: Context, uri: Uri): String =
-        FFmpegKitConfig.getSafParameterForRead(ctx, uri)
 
     private fun tag(tags: JSONObject?, key: String): String {
         if (tags == null) return ""
