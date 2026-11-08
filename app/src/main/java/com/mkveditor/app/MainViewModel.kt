@@ -35,8 +35,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var suggestedName = "editado.mkv"
     val tracks = mutableStateListOf<Track>()
 
-    private var mainParam: String? = null
-    private val extras = mutableListOf<String>()
+    private var mainParam: String? = null          // ruta del MKV principal copiado a caché
+    private val extras = mutableListOf<String>()   // rutas de archivos externos copiados
     private var nextUid = 1
     private var resultFile: File? = null
 
@@ -60,6 +60,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         detail = detail, title = title, language = language, isDefault = isDefault, origin = origin
     )
 
+    private fun extensionOf(name: String?, fallback: String): String {
+        val e = (name ?: "").substringAfterLast('.', "")
+        return if (e.isNotBlank() && e.length <= 5) e else fallback
+    }
+
+    /** Copia el archivo elegido a la memoria interna de la app (más fiable para FFmpeg). */
+    private fun copyToCache(uri: Uri, dest: File) {
+        ctx.contentResolver.openInputStream(uri)!!.use { input ->
+            dest.outputStream().use { input.copyTo(it, 1024 * 1024) }
+        }
+    }
+
     private fun cleanCache() {
         ctx.cacheDir.listFiles()?.forEach {
             if (it.name.startsWith("out_") || it.name.startsWith("merge_") || it.name == "list.txt") {
@@ -70,20 +82,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Agregar MKV ----------
     fun loadMain(uri: Uri) {
+        if (busy) return
         viewModelScope.launch {
             busy = true
-            message = "Leyendo pistas…"
+            progress = 0f
+            message = "Copiando archivo a la app… (puede tardar con archivos grandes)"
+            var copy: File? = null
             try {
-                val param = Engine.safParam(ctx, uri)
-                val r = withContext(Dispatchers.IO) { Engine.probe(param) }
+                val name = queryName(uri) ?: "video.mkv"
+                val dest = File(ctx.cacheDir, "src_main_${System.currentTimeMillis()}.${extensionOf(name, "mkv")}")
+                copy = dest
+                val r = withContext(Dispatchers.IO) {
+                    copyToCache(uri, dest)
+                    Engine.probe(dest.absolutePath)
+                }
                 if (r == null || r.streams.isEmpty()) {
+                    dest.delete()
                     message = "No se pudo leer el archivo."
                 } else {
-                    mainParam = param
+                    // borrar copias anteriores
+                    mainParam?.let { File(it).delete() }
+                    extras.forEach { File(it).delete() }
                     extras.clear()
                     tracks.clear()
+                    mainParam = dest.absolutePath
                     r.streams.forEach { tracks.add(it.toTrack(0, "")) }
-                    fileName = queryName(uri) ?: "video.mkv"
+                    fileName = name
                     durationSec = r.durationSec
                     globalTitle = ""
                     stripMetadata = false
@@ -91,11 +115,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     trimStart = ""
                     trimEnd = ""
                     filter = Filter.ALL
-                    val base = (fileName ?: "video").substringBeforeLast(".")
-                    suggestedName = "${base}_editado.mkv"
+                    suggestedName = "${name.substringBeforeLast(".")}_editado.mkv"
                     message = "Archivo cargado: ${tracks.size} pistas."
                 }
             } catch (e: Exception) {
+                copy?.delete()
                 message = "Error: ${e.message}"
             } finally {
                 busy = false
@@ -109,22 +133,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             message = "Primero agrega un MKV."
             return
         }
+        if (busy) return
         viewModelScope.launch {
             busy = true
+            message = "Leyendo archivo externo…"
+            var copy: File? = null
             try {
-                val param = Engine.safParam(ctx, uri)
-                val r = withContext(Dispatchers.IO) { Engine.probe(param) }
+                val name = queryName(uri) ?: "externo"
+                val dest = File(ctx.cacheDir, "src_ext_${System.currentTimeMillis()}.${extensionOf(name, "bin")}")
+                copy = dest
+                val r = withContext(Dispatchers.IO) {
+                    copyToCache(uri, dest)
+                    Engine.probe(dest.absolutePath)
+                }
                 val usable = r?.streams?.filter { it.type == "audio" || it.type == "subtitle" }.orEmpty()
                 if (usable.isEmpty()) {
+                    dest.delete()
                     message = "El archivo no contiene audio ni subtítulos válidos."
                 } else {
-                    extras.add(param)
+                    extras.add(dest.absolutePath)
                     val idx = extras.size
-                    val name = queryName(uri) ?: "externo"
                     usable.forEach { tracks.add(it.toTrack(idx, name)) }
                     message = "Se añadieron ${usable.size} pista(s) de $name."
                 }
             } catch (e: Exception) {
+                copy?.delete()
                 message = "Error: ${e.message}"
             } finally {
                 busy = false
